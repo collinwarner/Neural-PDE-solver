@@ -2,7 +2,7 @@ using  OrdinaryDiffEq, Flux, DiffEqFlux, DiffEqOperators,  LinearAlgebra,  Sundi
 
 function Neural_PDE(datasize, N, tspan, t)
 
-#Discretization USED
+    #Discretization USED
     #Finite Difference Method PDE -> ODE
     dz = 1/(N) #step size in z
     d = ones(N-2) #diagnol5
@@ -29,10 +29,10 @@ function Neural_PDE(datasize, N, tspan, t)
     Q= Matrix{Int64}(I, N-2, N-2)
     QQ= cu(vcat(zeros(1,N-2), Q, zeros(1,N-2)))
 
-#END OF Discretization parameters
+    #END OF Discretization parameters
 
 
-#Initial Conditions
+    #Initial Conditions
     zs = (1:N) * dz
     z = zs[2:N-1]
     f0 = z -> exp(-200*(z-0.75)^2)
@@ -46,47 +46,67 @@ function Neural_PDE(datasize, N, tspan, t)
     temp_train = get_data(t, full_tspan, firstp, x)
     training_data = cu(collect(temp_train(t)))
 
-	display("here")
+    display("here")
 
 
     u0 = param(x) #|>gpu
-    ann = Chain(Dense(N,50,tanh), Dense(50,N-2)) |>gpu
+    #ann = Chain(Dense(N,50,tanh), Dense(50,N-2)) |>gpu
+    ann = Chain(Dense(N-2,50,tanh), Dense(50,N-2)) |> gpu
     p1 = Flux.data(DiffEqFlux.destructure(ann))
     p2 = vec(D2_B)
     p3 = vec(QQ)
+    #p4 = vec(D1_B)
     p4 = param([p1;p2;p3])
-    ps = Flux.params(p4,u0)
+    #ps = Flux.params(p4,u0)
 
     function dudt_(u::TrackedArray,p,t)
-
-        Flux.Tracker.collect(DiffEqFlux.restructure(ann, p[1:length(p1)])(reshape(p[length(p1)+1+length(p2):end], size(QQ))*u) + reshape(p[length(p1)+1:length(p1)+length(p2)], size(D2_B))*(reshape(p[length(p1)+1+length(p2):end], size(QQ))*u))
-
-
+        #return Flux.Tracker.collect(u)
+        Φ = DiffEqFlux.restructure(ann, p[1:length(p1)])
+        #pQQ = reshape(p[length(p1)+1+length(p2):end], size(QQ))
+        pQQ = QQ
+        pD2_B = D2_B
+        Flux.Tracker.collect(D1_B*(pQQ*Φ(u)) + pD2_B*(pQQ*u))
+        #Φ = DiffEqFlux.restructure(ann, p)
+        #Flux.Tracker.collect(D1_B*(QQ*Φ(u)) + D2_B*(QQ*u))
     end
     function dudt_(u::AbstractArray,p,t)
+        #return Flux.data(u)
 
-        Flux.data(DiffEqFlux.restructure(ann, p[1:length(p1)])(reshape(p[length(p1)+1+length(p2):end], size(QQ))*u)) + reshape(p[length(p1)+1:length(p1)+length(p2)], size(D2_B))*(reshape(p[length(p1)+1+length(p2):end], size(QQ))*u)
+        Φ = DiffEqFlux.restructure(ann, p[1:length(p1)])
+        #pQQ = reshape(p[length(p1)+1+length(p2):end], size(QQ))
+        pQQ = QQ
+        pD2_B = D2_B
+        Flux.data(D1_B*(pQQ*Φ(u))) + pD2_B*(pQQ*u)
+        #Φ = DiffEqFlux.restructure(ann, p)
+        #Flux.data(D1_B*(QQ*Φ(u))) + D2_B*(QQ*u)
 
     end
     predict_adjoint()  =   diffeq_adjoint(p4,prob,Tsit5(),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
-    loss_adjoint()  = sum(abs2, training_data - predict_adjoint()) #super slow dev the package, watch chris's video, inside the layer do something
-cb = function ()
-        display(loss_adjoint())
+    #predict_adjoint()  =   diffeq_adjoint(p1,prob,Tsit5(),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
+    function loss_adjoint()
+        pre = predict_adjoint()
+        sum(abs2, training_data - pre) #super slow dev the package, watch chris's video, inside the layer do something
+    end
+    cb = function ()
         cur_pred = collect(Flux.data(predict_adjoint()))
+        #show(IOContext(stdout, :compact=>true), cur_pred[end, :])
         pl = scatter(t,training_data[end,:],label="data", legend =:bottomright)
         scatter!(pl,t,cur_pred[end,:],label="prediction")
-        display(plot(pl))
+        display(pl)
+        display(loss_adjoint())
     end
- prob = ODEProblem{false}(dudt_,u0,tspan,p4)
+    prob = ODEProblem{false}(dudt_,u0,tspan,p4)
+    #prob = ODEProblem{false}(dudt_,u0,tspan,p1)
     epochs = Iterators.repeated((), 100)
-    learning_rate = Descent(0.001)
+    learning_rate = Descent(0.01)
     lyrs = Flux.params(p4)
+    #lyrs = Flux.params(p1)
     new_tf = 0.00f0
     tolerance = 0.1
     #solve PDE in smaller time segments to reduce likelyhood of divergence
-    for i in 1:145
+    for i in 1:1
         #get updated time
-        new_tf += 0.01f0
+        new_tf += 1.5f0
         tspan = (0.0f0,new_tf) #start and end time with better precision
         t = range(tspan[1], tspan[2], length = datasize) #time range
 
@@ -95,13 +115,14 @@ cb = function ()
 
         #solve the backpass
         prob = ODEProblem{false}(dudt_,u0,tspan,p4)
-        Flux.train!(loss_adjoint, lyrs, epochs, learning_rate, cb = cb)
+        #prob = ODEProblem{false}(dudt_,u0,tspan,p1)
+        Flux.train!(loss_adjoint, lyrs, epochs, learning_rate, cb=cb)
 
         while (loss_adjoint() > tolerance)
-            Flux.train!(loss_adjoint, lyrs, epochs, learning_rate, cb = cb)
+            Flux.train!(loss_adjoint, lyrs, epochs, learning_rate, cb=cb)
             #display(loss_adjoint())
         end
-	println("finished loop")
+        println("finished loop")
         #while (loss_adjoint() > 0.01)
         #    Flux.train!(loss_adjoint, lyrs, data, opt)
         #end
@@ -111,7 +132,7 @@ cb = function ()
     #cur_pred = []
 
 
-   #cb()
+    #cb()
 
     return training_data, cur_pred
 
@@ -140,7 +161,7 @@ function get_data(t, tspan, firstp, x)
 end
 
 
- #Neural_PDE(datasize, N, tspan, t)
+#Neural_PDE(datasize, N, tspan, t)
 Neural_PDE(datasize, N, tspan, t)
 
 #Juno.profiler()
