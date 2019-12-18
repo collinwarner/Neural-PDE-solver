@@ -81,8 +81,8 @@ function Neural_PDE(datasize, N, tspan, t)
         #Flux.data(D1_B*(QQ*Φ(u))) + D2_B*(QQ*u)
 
     end
-    predict_adjoint()  =   diffeq_adjoint(p4,prob,Tsit5(),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
-    #predict_adjoint()  =   diffeq_adjoint(p1,prob,Tsit5(),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
+    predict_adjoint()  =   diffeq_adjoint(p4,prob,ROCK2(eigen_est = (integ)->integ.eigen_est = (1/N)^2),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
+    #predict_adjoint()  =   diffeq_adjoint(p1,prob,ROCK2(eigen_est = (integ)->integ.eigen_est = (1/N)^2),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
     function loss_adjoint()
         pre = predict_adjoint()
         sum(abs2, training_data - pre) #super slow dev the package, watch chris's video, inside the layer do something
@@ -91,7 +91,7 @@ function Neural_PDE(datasize, N, tspan, t)
         cur_pred = collect(Flux.data(predict_adjoint()))
         #show(IOContext(stdout, :compact=>true), cur_pred[end, :])
         pl = scatter(t,training_data[end,:],label="data", legend =:bottomright)
-        scatter!(pl,t,cur_pred[end,:],label="prediction")
+        scatter!(pl,t,cur_pred[end,:],label="prediction", size=(300, 300))
         display(pl)
         display(loss_adjoint())
     end
@@ -102,11 +102,12 @@ function Neural_PDE(datasize, N, tspan, t)
     lyrs = Flux.params(p4)
     #lyrs = Flux.params(p1)
     new_tf = 0.00f0
-    tolerance = 0.1
+    tolerance = 0.08
     #solve PDE in smaller time segments to reduce likelyhood of divergence
-    for i in 1:1
+    nn = 20
+    for i in 1:nn
         #get updated time
-        new_tf += 1.5f0
+        new_tf += 1.5/nn
         tspan = (0.0f0,new_tf) #start and end time with better precision
         t = range(tspan[1], tspan[2], length = datasize) #time range
 
@@ -156,7 +157,7 @@ end
 function get_data(t, tspan, firstp, x)
 
     generate_data = ODEProblem(ode_i, x,tspan, firstp)
-    true_sol = solve(generate_data, Tsit5(), abstol = 1e-9, reltol = 1e-9)
+    true_sol = solve(generate_data, ROCK2(eigen_est = (integ)->integ.eigen_est = (1/N)^2), abstol = 1e-9, reltol = 1e-9)
     return true_sol
 end
 
