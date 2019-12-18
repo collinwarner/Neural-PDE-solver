@@ -41,7 +41,7 @@ function Neural_PDE(datasize, N, tspan, t)
     x = u0[2:N-1] |> gpu
 
     firstp =  D1_B, D2_B, QQ
-    EIGEN_EST[] = maximum(abs, eigvals(Matrix(D2_B*QQ)))/2
+    EIGEN_EST[] = maximum(abs, eigvals(Matrix(D2_B*QQ)))
 
     #training_data = get_data(t, tspan, firstp, x)
     full_tspan = (0.0, 1.5)
@@ -53,7 +53,7 @@ function Neural_PDE(datasize, N, tspan, t)
 
     u0 = param(x) #|>gpu
     #ann = Chain(Dense(N,50,tanh), Dense(50,N-2)) |>gpu
-    ann = Chain(Dense(N-2,50,tanh), Dense(50,N-2)) |> gpu
+    ann = Chain(Dense(N-2,N-2,tanh)) |> gpu
     p1 = Flux.data(DiffEqFlux.destructure(ann))
     p2 = vec(D2_B)
     p3 = vec(QQ)
@@ -83,11 +83,12 @@ function Neural_PDE(datasize, N, tspan, t)
         #Flux.data(D1_B*(QQ*Φ(u))) + D2_B*(QQ*u)
 
     end
-    predict_adjoint()  =   diffeq_adjoint(p4,prob,ROCK4(eigen_est = (integ)->integ.eigen_est = EIGEN_EST[]),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
-    #predict_adjoint()  =   diffeq_adjoint(p1,prob,ROCK4(eigen_est = (integ)->integ.eigen_est = EIGEN_EST[]),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
+    predict_adjoint()  =   diffeq_adjoint(p4,prob,ROCK4(eigen_est = (integ)->integ.eigen_est = EIGEN_EST[]),u0=u0, saveat = t)
+    #predict_adjoint()  =   diffeq_adjoint(p1,prob,ROCK4(eigen_est = (integ)->integ.eigen_est = EIGEN_EST[]),u0=u0, saveat = t)
     function loss_adjoint()
         pre = predict_adjoint()
         sum(abs2, training_data - pre) #super slow dev the package, watch chris's video, inside the layer do something
+
     end
     cb = function ()
         cur_pred = collect(Flux.data(predict_adjoint()))
@@ -99,8 +100,7 @@ function Neural_PDE(datasize, N, tspan, t)
     end
     prob = ODEProblem{false}(dudt_,u0,tspan,p4)
     #prob = ODEProblem{false}(dudt_,u0,tspan,p1)
-    epochs = Iterators.repeated((), 100)
-    learning_rate = Descent(0.01)
+    epochs = Iterators.repeated((), 200) #worksish 500
     lyrs = Flux.params(p4)
     #lyrs = Flux.params(p1)
     new_tf = 0.00f0
@@ -109,6 +109,7 @@ function Neural_PDE(datasize, N, tspan, t)
     nn = 20
     for i in 1:nn
         #get updated time
+        learning_rate =Descent(0.1)
         new_tf += 1.5/nn
         tspan = (0.0f0,new_tf) #start and end time with better precision
         t = range(tspan[1], tspan[2], length = datasize) #time range
@@ -121,6 +122,7 @@ function Neural_PDE(datasize, N, tspan, t)
         #prob = ODEProblem{false}(dudt_,u0,tspan,p1)
         Flux.train!(loss_adjoint, lyrs, epochs, learning_rate, cb=cb)
 
+        learning_rate = Descent(0.001)
         while (loss_adjoint() > tolerance)
             Flux.train!(loss_adjoint, lyrs, epochs, learning_rate, cb=cb)
             #display(loss_adjoint())
