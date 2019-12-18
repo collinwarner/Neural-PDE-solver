@@ -1,4 +1,5 @@
 using  OrdinaryDiffEq, Flux, DiffEqFlux, DiffEqOperators,  LinearAlgebra,  Sundials, CuArrays, CUDAnative, Plots
+const EIGEN_EST = Ref(0.0)
 
 function Neural_PDE(datasize, N, tspan, t)
 
@@ -40,6 +41,7 @@ function Neural_PDE(datasize, N, tspan, t)
     x = u0[2:N-1] |> gpu
 
     firstp =  D1_B, D2_B, QQ
+    EIGEN_EST[] = maximum(abs, eigvals(Matrix(D2_B*QQ)))/2
 
     #training_data = get_data(t, tspan, firstp, x)
     full_tspan = (0.0, 1.5)
@@ -81,8 +83,8 @@ function Neural_PDE(datasize, N, tspan, t)
         #Flux.data(D1_B*(QQ*Φ(u))) + D2_B*(QQ*u)
 
     end
-    predict_adjoint()  =   diffeq_adjoint(p4,prob,ROCK2(eigen_est = (integ)->integ.eigen_est = (1/N)^2),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
-    #predict_adjoint()  =   diffeq_adjoint(p1,prob,ROCK2(eigen_est = (integ)->integ.eigen_est = (1/N)^2),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
+    predict_adjoint()  =   diffeq_adjoint(p4,prob,ROCK4(eigen_est = (integ)->integ.eigen_est = EIGEN_EST[]),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
+    #predict_adjoint()  =   diffeq_adjoint(p1,prob,ROCK4(eigen_est = (integ)->integ.eigen_est = EIGEN_EST[]),u0=u0, saveat = t,abstol=1e-7,reltol=1e-7)
     function loss_adjoint()
         pre = predict_adjoint()
         sum(abs2, training_data - pre) #super slow dev the package, watch chris's video, inside the layer do something
@@ -157,7 +159,7 @@ end
 function get_data(t, tspan, firstp, x)
 
     generate_data = ODEProblem(ode_i, x,tspan, firstp)
-    true_sol = solve(generate_data, ROCK2(eigen_est = (integ)->integ.eigen_est = (1/N)^2), abstol = 1e-9, reltol = 1e-9)
+    true_sol = solve(generate_data, ROCK4(eigen_est = (integ)->integ.eigen_est = EIGEN_EST[]), abstol = 1e-9, reltol = 1e-9)
     return true_sol
 end
 
